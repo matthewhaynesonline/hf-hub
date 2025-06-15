@@ -285,7 +285,7 @@ impl ApiBuilder {
         ];
 
         Self {
-            endpoint: "https://huggingface.co".to_string(),
+            endpoint: crate::config::DEFAULT_ENDPOINT.to_string(),
             cache,
             token,
             max_files: 1,

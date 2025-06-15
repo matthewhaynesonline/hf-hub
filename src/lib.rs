@@ -10,6 +10,35 @@ use std::path::PathBuf;
 /// The actual Api to interact with the hub.
 #[cfg(any(feature = "tokio", feature = "ureq"))]
 pub mod api;
+pub mod utils;
+
+/// Configuration constants
+pub mod config {
+    /// HF Endpoint
+    pub const DEFAULT_ENDPOINT: &str = "https://huggingface.co";
+    /// Path separator used in repository names and URLs.
+    pub const SEPARATOR: &str = "/";
+    /// Normalized separator used to replace path separators in repo names.
+    pub const NORMALIZED_SEPARATOR: &str = "--";
+    /// URL-encoded separator.
+    pub const ENCODED_SEPARATOR: &str = "%2F";
+    /// Default cache directory name relative to the user's home directory.
+    pub const CACHE_DIR: &str = ".cache";
+    /// Top-level Hugging Face directory name within the cache.
+    pub const TOP_LEVEL_HF_DIR: &str = "huggingface";
+    /// Hub-specific directory name for storing data.
+    pub const HUB_DIR: &str = "hub";
+    /// Filename for storing authentication token.
+    pub const TOKEN_FILE: &str = "token";
+    /// Directory name for storing refs.
+    pub const REFS_DIR: &str = "refs";
+    /// Directory name for storing snapshots.
+    pub const SNAPSHOTS_DIR: &str = "snapshots";
+    /// Directory name for storing blobs.
+    pub const BLOBS_DIR: &str = "blobs";
+    /// Default branch name to use when none is specified.
+    pub const DEFAULT_BRANCH: &str = "main";
+}
 
 const HF_HOME: &str = "HF_HOME";
 
@@ -23,6 +52,27 @@ pub enum RepoType {
     Dataset,
     /// This is a space, usually a demo showcashing a given model or dataset
     Space,
+}
+
+impl RepoType {
+    /// Get the prefix string for this repository type.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use hf_hub::RepoType;
+    ///
+    /// assert_eq!(RepoType::Model.prefix(), "models");
+    /// assert_eq!(RepoType::Dataset.prefix(), "datasets");
+    /// assert_eq!(RepoType::Space.prefix(), "spaces");
+    /// ```
+    pub fn prefix(&self) -> &'static str {
+        match self {
+            RepoType::Model => "models",
+            RepoType::Dataset => "datasets",
+            RepoType::Space => "spaces",
+        }
+    }
 }
 
 /// A local struct used to fetch information from the cache folder.
@@ -43,7 +93,7 @@ impl Cache {
         match std::env::var(HF_HOME) {
             Ok(home) => {
                 let mut path: PathBuf = home.into();
-                path.push("hub");
+                path.push(config::HUB_DIR);
                 Self::new(path)
             }
             Err(_) => Self::default(),
@@ -60,7 +110,7 @@ impl Cache {
         let mut path = self.path.clone();
         // Remove `"hub"`
         path.pop();
-        path.push("token");
+        path.push(config::TOKEN_FILE);
         path
     }
 
@@ -158,7 +208,7 @@ impl CacheRepo {
 
     fn ref_path(&self) -> PathBuf {
         let mut ref_path = self.path();
-        ref_path.push("refs");
+        ref_path.push(config::REFS_DIR);
         ref_path.push(self.repo.revision());
         ref_path
     }
@@ -181,14 +231,14 @@ impl CacheRepo {
     #[cfg(any(feature = "tokio", feature = "ureq"))]
     pub(crate) fn blob_path(&self, etag: &str) -> PathBuf {
         let mut blob_path = self.path();
-        blob_path.push("blobs");
+        blob_path.push(config::BLOBS_DIR);
         blob_path.push(etag);
         blob_path
     }
 
     pub(crate) fn pointer_path(&self, commit_hash: &str) -> PathBuf {
         let mut pointer_path = self.path();
-        pointer_path.push("snapshots");
+        pointer_path.push(config::SNAPSHOTS_DIR);
         pointer_path.push(commit_hash);
         pointer_path
     }
@@ -196,10 +246,7 @@ impl CacheRepo {
 
 impl Default for Cache {
     fn default() -> Self {
-        let mut path = dirs::home_dir().expect("Cache directory cannot be found");
-        path.push(".cache");
-        path.push("huggingface");
-        path.push("hub");
+        let path = utils::get_hub_dir();
         Self::new(path)
     }
 }
@@ -215,7 +262,7 @@ pub struct Repo {
 impl Repo {
     /// Repo with the default branch ("main").
     pub fn new(repo_id: String, repo_type: RepoType) -> Self {
-        Self::with_revision(repo_id, repo_type, "main".to_string())
+        Self::with_revision(repo_id, repo_type, config::DEFAULT_BRANCH.to_string())
     }
 
     /// fully qualified Repo
@@ -244,12 +291,7 @@ impl Repo {
 
     /// The normalized folder nameof the repo within the cache directory
     pub fn folder_name(&self) -> String {
-        let prefix = match self.repo_type {
-            RepoType::Model => "models",
-            RepoType::Dataset => "datasets",
-            RepoType::Space => "spaces",
-        };
-        format!("{prefix}--{}", self.repo_id).replace('/', "--")
+        utils::normalized_repo_folder_name(&self.repo_type, &self.repo_id)
     }
 
     /// The revision
@@ -262,30 +304,25 @@ impl Repo {
     pub fn url(&self) -> String {
         match self.repo_type {
             RepoType::Model => self.repo_id.to_string(),
-            RepoType::Dataset => {
-                format!("datasets/{}", self.repo_id)
-            }
-            RepoType::Space => {
-                format!("spaces/{}", self.repo_id)
-            }
+            _ => format!("{}/{}", self.repo_type.prefix(), self.repo_id),
         }
     }
 
     /// Revision needs to be url escaped before being used in a URL
     #[cfg(any(feature = "tokio", feature = "ureq"))]
     pub fn url_revision(&self) -> String {
-        self.revision.replace('/', "%2F")
+        utils::encode_separator(&self.revision)
     }
 
     /// Used to compute the repo's url part when accessing the metadata of the repo
     #[cfg(any(feature = "tokio", feature = "ureq"))]
     pub fn api_url(&self) -> String {
-        let prefix = match self.repo_type {
-            RepoType::Model => "models",
-            RepoType::Dataset => "datasets",
-            RepoType::Space => "spaces",
-        };
-        format!("{prefix}/{}/revision/{}", self.repo_id, self.url_revision())
+        format!(
+            "{}/{}/revision/{}",
+            self.repo_type.prefix(),
+            self.repo_id,
+            self.url_revision()
+        )
     }
 }
 
