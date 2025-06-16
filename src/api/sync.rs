@@ -11,6 +11,7 @@ use std::io::Seek;
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
+use std::sync::OnceLock;
 use thiserror::Error;
 use ureq::config::ConfigBuilder;
 use ureq::config::RedirectAuthHeaders;
@@ -338,22 +339,12 @@ impl ApiBuilder {
     pub fn build(self) -> Result<Api, ApiError> {
         let headers = self.build_headers();
 
-        let builder = builder()?.redirect_auth_headers(RedirectAuthHeaders::SameHost);
-        let agent: Agent = builder.build().into();
-        let client = HeaderAgent::new(agent, headers.clone());
-
-        let no_redirect_agent: Agent = Agent::config_builder()
-            // .try_proxy_from_env(true)
-            .max_redirects(0)
-            .build()
-            .into();
-        let no_redirect_client = HeaderAgent::new(no_redirect_agent, headers);
-
         Ok(Api {
             endpoint: self.endpoint,
             cache: self.cache,
-            client,
-            no_redirect_client,
+            client_headers: headers,
+            client: OnceLock::new(),
+            no_redirect_client: OnceLock::new(),
             max_retries: self.max_retries,
             progress: self.progress,
         })
@@ -373,8 +364,9 @@ struct Metadata {
 pub struct Api {
     endpoint: String,
     cache: Cache,
-    client: HeaderAgent,
-    no_redirect_client: HeaderAgent,
+    client_headers: HeaderMap,
+    client: OnceLock<HeaderAgent>,
+    no_redirect_client: OnceLock<HeaderAgent>,
     max_retries: usize,
     progress: bool,
 }
@@ -441,6 +433,23 @@ fn exponential_backoff(base_wait_time: usize, n: usize, max: usize) -> usize {
     (base_wait_time + n.pow(2) + jitter()).min(max)
 }
 
+fn build_client(headers: HeaderMap) -> Result<HeaderAgent, ApiError> {
+    let builder = builder()?.redirect_auth_headers(RedirectAuthHeaders::SameHost);
+    let agent: Agent = builder.build().into();
+
+    Ok(HeaderAgent::new(agent, headers))
+}
+
+fn build_no_redirect_client(headers: HeaderMap) -> Result<HeaderAgent, ApiError> {
+    let no_redirect_agent: Agent = Agent::config_builder()
+        // .try_proxy_from_env(true)
+        .max_redirects(0)
+        .build()
+        .into();
+
+    Ok(HeaderAgent::new(no_redirect_agent, headers))
+}
+
 impl Api {
     /// Creates a default Api, for Api options See [`ApiBuilder`]
     pub fn new() -> Result<Self, ApiError> {
@@ -450,12 +459,23 @@ impl Api {
     /// Get the underlying api client
     /// Allows for lower level access
     pub fn client(&self) -> &HeaderAgent {
-        &self.client
+        self.client.get_or_init(|| {
+            build_client(self.client_headers.clone()).expect("Failed to build client")
+        })
+    }
+
+    /// Get the underlying api client
+    /// Allows for lower level access
+    pub fn no_redirect_client(&self) -> &HeaderAgent {
+        self.no_redirect_client.get_or_init(|| {
+            build_no_redirect_client(self.client_headers.clone())
+                .expect("Failed to build no_redirect_client")
+        })
     }
 
     fn metadata(&self, url: &str) -> Result<Metadata, ApiError> {
         let mut response = self
-            .no_redirect_client
+            .no_redirect_client()
             .get(url)
             .header(RANGE, "bytes=0-0")
             .call()
@@ -497,7 +517,7 @@ impl Api {
 
                         // Follow redirect
                         response = self
-                            .no_redirect_client
+                            .no_redirect_client()
                             .get(&redirect_uri.to_string())
                             .header(RANGE, "bytes=0-0")
                             .call()
@@ -546,7 +566,7 @@ impl Api {
                 .expect("location header in redirect");
             let location = std::str::from_utf8(location.as_bytes())
                 .map_err(|_| ApiError::InvalidHeader("etag"))?;
-            self.client
+            self.client()
                 .get(location)
                 .header(RANGE, "bytes=0-0")
                 .call()
@@ -630,7 +650,7 @@ impl Api {
     {
         let range = format!("bytes={current}-");
         let response = self
-            .client
+            .client()
             .get(url)
             .header(RANGE, &range)
             .call()
@@ -857,7 +877,7 @@ impl ApiRepo {
     /// ```
     pub fn info_request(&self) -> RequestBuilder<WithoutBody> {
         let url = format!("{}/api/{}", self.api.endpoint, self.repo.api_url());
-        self.api.client.get(&url)
+        self.api.client().get(&url)
     }
 }
 
@@ -1286,7 +1306,7 @@ mod tests {
             .with_token(Some("token".to_string()))
             .build()
             .unwrap();
-        let headers = api.client.headers;
+        let headers = &api.client().headers;
         assert_eq!(
             headers.get("Authorization"),
             Some(&"Bearer token".to_string())
@@ -1296,7 +1316,7 @@ mod tests {
     #[test]
     fn headers_default() {
         let api = ApiBuilder::new().build().unwrap();
-        let headers = api.client.headers;
+        let headers = &api.client().headers;
         assert_eq!(
             headers.get(USER_AGENT),
             Some(&"unknown/None; hf-hub/0.4.3; rust/unknown".to_string())
@@ -1309,7 +1329,7 @@ mod tests {
             .with_user_agent("origin", "custom")
             .build()
             .unwrap();
-        let headers = api.client.headers;
+        let headers = &api.client().headers;
         assert_eq!(
             headers.get(USER_AGENT),
             Some(&"unknown/None; hf-hub/0.4.3; rust/unknown; origin/custom".to_string())

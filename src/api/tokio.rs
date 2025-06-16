@@ -18,6 +18,7 @@ use std::collections::BinaryHeap;
 use std::num::ParseIntError;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
+use std::sync::OnceLock;
 use thiserror::Error;
 use tokio::io::AsyncReadExt;
 use tokio::io::{AsyncSeekExt, AsyncWriteExt, SeekFrom};
@@ -361,36 +362,13 @@ impl ApiBuilder {
     /// Consumes the builder and builds the final [`Api`]
     pub fn build(self) -> Result<Api, ApiError> {
         let headers = self.build_headers()?;
-        let client = Client::builder().default_headers(headers.clone()).build()?;
 
-        // Policy: only follow relative redirects
-        // See: https://github.com/huggingface/huggingface_hub/blob/9c6af39cdce45b570f0b7f8fad2b311c96019804/src/huggingface_hub/file_download.py#L411
-        let relative_redirect_policy = Policy::custom(|attempt| {
-            // Follow redirects up to a maximum of 10.
-            if attempt.previous().len() > 10 {
-                return attempt.error("too many redirects");
-            }
-
-            if let Some(last) = attempt.previous().last() {
-                // If the url is not relative
-                if last.make_relative(attempt.url()).is_none() {
-                    return attempt.stop();
-                }
-            }
-
-            // Follow redirect
-            attempt.follow()
-        });
-
-        let relative_redirect_client = Client::builder()
-            .redirect(relative_redirect_policy)
-            .default_headers(headers)
-            .build()?;
         Ok(Api {
             endpoint: self.endpoint,
             cache: self.cache,
-            client,
-            relative_redirect_client,
+            client_headers: headers,
+            client: OnceLock::new(),
+            relative_redirect_client: OnceLock::new(),
             max_files: self.max_files,
             chunk_size: self.chunk_size,
             parallel_failures: self.parallel_failures,
@@ -413,8 +391,9 @@ struct Metadata {
 pub struct Api {
     endpoint: String,
     cache: Cache,
-    client: Client,
-    relative_redirect_client: Client,
+    client_headers: HeaderMap,
+    client: OnceLock<Client>,
+    relative_redirect_client: OnceLock<Client>,
     max_files: usize,
     chunk_size: Option<usize>,
     parallel_failures: usize,
@@ -484,6 +463,36 @@ fn exponential_backoff(base_wait_time: usize, n: usize, max: usize) -> usize {
     (base_wait_time + n.pow(2) + jitter()).min(max)
 }
 
+fn build_client(headers: HeaderMap) -> Result<Client, ApiError> {
+    Ok(Client::builder().default_headers(headers).build()?)
+}
+
+fn build_relative_redirect_client(headers: HeaderMap) -> Result<Client, ApiError> {
+    // Policy: only follow relative redirects
+    // See: https://github.com/huggingface/huggingface_hub/blob/9c6af39cdce45b570f0b7f8fad2b311c96019804/src/huggingface_hub/file_download.py#L411
+    let relative_redirect_policy = Policy::custom(|attempt| {
+        // Follow redirects up to a maximum of 10.
+        if attempt.previous().len() > 10 {
+            return attempt.error("too many redirects");
+        }
+
+        if let Some(last) = attempt.previous().last() {
+            // If the url is not relative
+            if last.make_relative(attempt.url()).is_none() {
+                return attempt.stop();
+            }
+        }
+
+        // Follow redirect
+        attempt.follow()
+    });
+
+    Ok(Client::builder()
+        .redirect(relative_redirect_policy)
+        .default_headers(headers)
+        .build()?)
+}
+
 impl Api {
     /// Creates a default Api, for Api options See [`ApiBuilder`]
     pub fn new() -> Result<Self, ApiError> {
@@ -493,12 +502,23 @@ impl Api {
     /// Get the underlying api client
     /// Allows for lower level access
     pub fn client(&self) -> &Client {
-        &self.client
+        self.client.get_or_init(|| {
+            build_client(self.client_headers.clone()).expect("Failed to build client")
+        })
+    }
+
+    /// Get the underlying api client
+    /// Allows for lower level access
+    pub fn relative_redirect_client(&self) -> &Client {
+        self.relative_redirect_client.get_or_init(|| {
+            build_relative_redirect_client(self.client_headers.clone())
+                .expect("Failed to build relative_redirect_client")
+        })
     }
 
     async fn metadata(&self, url: &str) -> Result<Metadata, ApiError> {
         let response = self
-            .relative_redirect_client
+            .relative_redirect_client()
             .get(url)
             .header(RANGE, "bytes=0-0")
             .send()
@@ -526,7 +546,7 @@ impl Api {
         // The response was redirected o S3 most likely which will
         // know about the size of the file
         let response = if response.status().is_redirection() {
-            self.client
+            self.client()
                 .get(headers.get(LOCATION).unwrap().to_str()?.to_string())
                 .header(RANGE, "bytes=0-0")
                 .send()
@@ -672,7 +692,7 @@ impl ApiRepo {
         for start in (start..length).step_by(chunk_size) {
             let url = url.to_string();
             let filename = filename.clone();
-            let client = self.api.client.clone();
+            let client = self.api.client().clone();
 
             let stop = std::cmp::min(start + chunk_size - 1, length);
             let permit = semaphore.clone();
@@ -930,7 +950,7 @@ impl ApiRepo {
     /// ```
     pub fn info_request(&self) -> RequestBuilder {
         let url = format!("{}/api/{}", self.api.endpoint, self.repo.api_url());
-        self.api.client.get(url)
+        self.api.client().get(url)
     }
 }
 
