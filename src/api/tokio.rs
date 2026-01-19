@@ -400,11 +400,29 @@ impl ApiBuilder {
     }
 }
 
+/// File metadata.
 #[derive(Debug)]
-struct Metadata {
+pub struct Metadata {
     commit_hash: String,
     etag: String,
     size: usize,
+}
+
+impl Metadata {
+    /// Get the commit hash of the file.
+    pub fn commit_hash(&self) -> &str {
+        &self.commit_hash
+    }
+
+    /// Get the etag of the file.
+    pub fn etag(&self) -> &str {
+        &self.etag
+    }
+
+    /// Get the file size.
+    pub fn size(&self) -> usize {
+        self.size
+    }
 }
 
 /// The actual Api used to interact with the hub.
@@ -496,7 +514,8 @@ impl Api {
         &self.client
     }
 
-    async fn metadata(&self, url: &str) -> Result<Metadata, ApiError> {
+    /// Get metadata for the file at the given URL.
+    pub async fn metadata(&self, url: &str) -> Result<Metadata, ApiError> {
         let response = self
             .relative_redirect_client
             .get(url)
@@ -523,7 +542,7 @@ impl Api {
             .to_str()?
             .to_string();
 
-        // The response was redirected o S3 most likely which will
+        // The response was redirected to S3 most likely which will
         // know about the size of the file
         let response = if response.status().is_redirection() {
             self.client
@@ -1335,6 +1354,7 @@ mod tests {
             json!({
                 "_id": "621ffdc136468d709f17ddb4",
                 "author": "mcpotato",
+                "config": {},
                 "createdAt": "2022-03-02T23:29:05.000Z",
                 "disabled": false,
                 "downloads": 0,
@@ -1432,7 +1452,7 @@ mod tests {
             .build()
             .expect("failed to build API");
 
-        let repo = api.model("google-bert/bert-base-uncased".to_string());
+        let repo = api.model("danieldk/private-test".to_string());
         let error = repo
             .info()
             .await

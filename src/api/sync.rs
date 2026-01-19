@@ -360,11 +360,29 @@ impl ApiBuilder {
     }
 }
 
+/// File metadata.
 #[derive(Debug)]
-struct Metadata {
+pub struct Metadata {
     commit_hash: String,
     etag: String,
     size: usize,
+}
+
+impl Metadata {
+    /// Get the commit hash of the file.
+    pub fn commit_hash(&self) -> &str {
+        &self.commit_hash
+    }
+
+    /// Get the etag of the file.
+    pub fn etag(&self) -> &str {
+        &self.etag
+    }
+
+    /// Get the file size.
+    pub fn size(&self) -> usize {
+        self.size
+    }
 }
 
 /// The actual Api used to interact with the hub.
@@ -453,7 +471,8 @@ impl Api {
         &self.client
     }
 
-    fn metadata(&self, url: &str) -> Result<Metadata, ApiError> {
+    /// Get metadata for the file at the given URL.
+    pub fn metadata(&self, url: &str) -> Result<Metadata, ApiError> {
         let mut response = self
             .no_redirect_client
             .get(url)
@@ -1207,6 +1226,7 @@ mod tests {
             json!({
                 "_id": "621ffdc136468d709f17ddb4",
                 "author": "mcpotato",
+                "config": {},
                 "createdAt": "2022-03-02T23:29:05.000Z",
                 "disabled": false,
                 "downloads": 0,
