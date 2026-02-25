@@ -49,6 +49,12 @@ pub fn get_hub_dir() -> Option<PathBuf> {
     Some(path)
 }
 
+#[cfg(feature = "cache-manager")]
+/// Checks if a directory entry corresponds to the `.locks` directory.
+pub(crate) fn is_locks_dir(entry: &walkdir::DirEntry) -> bool {
+    entry.file_name() == constants::LOCKS_DIR
+}
+
 /// Convert path separators in a string to flattened separators.
 ///
 /// # Examples

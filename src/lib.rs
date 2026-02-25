@@ -7,9 +7,14 @@
 use std::io::Write;
 use std::path::PathBuf;
 
+#[cfg(feature = "cache-manager")]
+use std::path::Path;
+
 /// The actual Api to interact with the hub.
 #[cfg(any(feature = "tokio", feature = "ureq"))]
 pub mod api;
+#[cfg(feature = "cache-manager")]
+pub mod cache_manager;
 pub mod paths;
 
 /// Configuration constants
@@ -40,6 +45,9 @@ pub(crate) mod constants {
     pub(crate) const SNAPSHOTS_DIR: &str = "snapshots";
     /// Directory name for storing blobs.
     pub(crate) const BLOBS_DIR: &str = "blobs";
+    #[cfg(feature = "cache-manager")]
+    /// Directory name for locks dir (to manage concurrent file access during downloads)
+    pub(crate) const LOCKS_DIR: &str = ".locks";
 
     /// Filename for storing authentication token.
     pub(crate) const TOKEN_FILE: &str = "token";
@@ -49,7 +57,7 @@ pub(crate) mod constants {
 }
 
 /// The type of repo to interact with
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, PartialOrd, Ord)]
 pub enum RepoType {
     /// This is a model, usually it consists of weight files and some configuration
     /// files
@@ -149,6 +157,26 @@ impl Cache {
             }
             Err(_) => Self::try_default(),
         }
+    }
+
+    #[cfg(feature = "cache-manager")]
+    pub(crate) fn validate_cache_dir_path(
+        cache_dir: &Path,
+    ) -> Result<(), cache_manager::CorruptedCacheError> {
+        // TODO: replace with is_dir call since that checks exists too?
+        if !cache_dir.exists() {
+            return Err(cache_manager::CorruptedCacheError::MissingCacheDir {
+                path: cache_dir.to_path_buf(),
+            });
+        }
+
+        if cache_dir.is_file() {
+            return Err(cache_manager::CorruptedCacheError::CacheDirCantBeFile {
+                path: cache_dir.to_path_buf(),
+            });
+        }
+
+        Ok(())
     }
 
     /// Creates a new cache object location
@@ -310,7 +338,7 @@ impl CacheRepo {
 }
 
 /// The representation of a repo on the hub.
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub struct Repo {
     repo_id: String,
     repo_type: RepoType,
