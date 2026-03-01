@@ -10,66 +10,43 @@ use std::path::{Path, PathBuf};
 
 use crate::{constants, RepoType};
 
-/// Returns the user's home directory path.
-///
-/// # Panics
-///
-/// Panics if the user's home directory cannot be determined. This typically
-/// only happens in very restricted environments or when the HOME environment
-/// variable is not set.
-pub(crate) fn get_home_dir() -> PathBuf {
-    dirs::home_dir().expect("Home directory cannot be found")
-}
-
 /// Returns the user's cache directory path.
 ///
 /// This follows platform conventions for cache storage:
 /// - On Unix-like systems: `~/.cache`
 /// - On Windows: `%USERPROFILE%\.cache`
 /// - On macOS: `~/.cache` (not following macOS conventions for consistency)
-///
-/// # Panics
-///
-/// Panics if the underlying get_home_dir call panics
-pub(crate) fn get_cache_dir() -> PathBuf {
-    let mut path = get_home_dir();
+pub(crate) fn get_cache_dir() -> Option<PathBuf> {
+    let mut path = dirs::home_dir()?;
     path.push(constants::CACHE_DIR);
-    path
+    Some(path)
 }
 
 /// Returns the top-level Hugging Face directory within the cache.
 ///
 /// The path follows the pattern: `{cache_dir}/huggingface`
-///
-/// # Panics
-///
-/// Panics if the underlying get_home_dir call panics
-pub(crate) fn get_top_level_hf_dir() -> PathBuf {
-    let mut path = get_cache_dir();
+pub(crate) fn get_top_level_hf_dir() -> Option<PathBuf> {
+    let mut path = get_cache_dir()?;
     path.push(constants::TOP_LEVEL_HF_DIR);
-    path
+    Some(path)
 }
 
 /// Returns the Hugging Face Hub directory for repository storage.
 ///
 /// The path follows the pattern: `{cache_dir}/{top_level_hf_dir}/hub`
 ///
-/// # Panics
-///
-/// Panics if the underlying get_home_dir call panics
-///
 /// # Examples
 ///
 /// ```rust
 /// use hf_hub::paths::get_hub_dir;
 ///
-/// let hub_dir = get_hub_dir();
+/// let hub_dir = get_hub_dir().unwrap();
 /// assert!(hub_dir.ends_with(std::path::Path::new("huggingface/hub")));
 /// ```
-pub fn get_hub_dir() -> PathBuf {
-    let mut path = get_top_level_hf_dir();
+pub fn get_hub_dir() -> Option<PathBuf> {
+    let mut path = get_top_level_hf_dir()?;
     path.push(constants::HUB_DIR);
-    path
+    Some(path)
 }
 
 /// Convert path separators in a string to flattened separators.

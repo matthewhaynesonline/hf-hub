@@ -108,8 +108,23 @@ impl Cache {
         Self { path }
     }
 
+    /// Creates a `Cache` using the default hub directory, returning `None` if the
+    /// home directory cannot be determined.
+    ///
+    /// Prefer this over [`Cache::default`] in environments where the home
+    /// directory may not be available.
+    pub fn try_default() -> Option<Self> {
+        paths::get_hub_dir().map(Self::new)
+    }
+
     /// Creates cache from environment variable HF_HOME (if defined) otherwise
     /// defaults to [`home_dir`]/.cache/huggingface/
+    ///
+    /// # Panics
+    ///
+    /// Panics if `HF_HOME` is not set and the home directory cannot be
+    /// determined (which is needed for the `Cache::default` call).
+    /// Use [`Cache::try_from_env`] to avoid this.
     pub fn from_env() -> Self {
         match std::env::var(constants::HF_HOME) {
             Ok(home) => {
@@ -118,6 +133,21 @@ impl Cache {
                 Self::new(path)
             }
             Err(_) => Self::default(),
+        }
+    }
+
+    /// Like [`Cache::from_env`] but returns an Option.
+    ///
+    /// Creates cache from environment variable HF_HOME (if defined) otherwise
+    /// defaults to [`home_dir`]/.cache/huggingface/.
+    pub fn try_from_env() -> Option<Self> {
+        match std::env::var(constants::HF_HOME) {
+            Ok(home) => {
+                let mut path: PathBuf = home.into();
+                path.push(constants::HUB_DIR);
+                Some(Self::new(path))
+            }
+            Err(_) => Self::try_default(),
         }
     }
 
@@ -192,8 +222,18 @@ impl Cache {
 }
 
 impl Default for Cache {
+    /// Default for Cache
+    ///
+    /// # Panics
+    ///
+    /// Panics if the call to [`paths::get_hub_dir`] returns `None`, likely if
+    /// the user's home directory cannot be determined. This typically
+    /// only happens in very restricted environments or when the HOME environment
+    /// variable is not set.
     fn default() -> Self {
-        let path = paths::get_hub_dir();
+        let path = paths::get_hub_dir().expect(
+            "Hub directory cannot be found, possibly because HOME directory cannot be found.",
+        );
         Self::new(path)
     }
 }
